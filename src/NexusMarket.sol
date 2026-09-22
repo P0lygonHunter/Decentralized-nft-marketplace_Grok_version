@@ -62,11 +62,14 @@ contract NexusMarket is
     error RoyaltyTooHigh();
     error FeeTooHigh();
     error TokenDoesNotExist();
+    error CommitTooRecent();
+    error AlreadyListed();
 
     // ============ Constants ============
     uint256 private constant MAX_COMMIT_AGE = 1 days;
+    uint256 private constant MIN_COMMIT_DELAY = 15 seconds; // prevents same-tx commit+buy
     uint96  public constant MAX_PLATFORM_FEE = 1000; // 10%
-    uint96  public constant MAX_ROYALTY_FEE  = 10000; // 100%
+    uint96  public constant MAX_ROYALTY_FEE  = 2000; // 20% max (was 100% - dangerous)
 
     // ============ State ============
     uint256 private _tokenIds;
@@ -185,6 +188,7 @@ contract NexusMarket is
         if (ownerOf(tokenId) != msg.sender) revert NotOwner();
         if (price == 0) revert ZeroPrice();
         if (expiry <= block.timestamp) revert BadExpiry();
+        if (listings[tokenId].price > 0) revert AlreadyListed(); // prevent silent overwrite
 
         listings[tokenId] = Listing({
             price: price,
@@ -227,6 +231,7 @@ contract NexusMarket is
         Commit memory c = commits[msg.sender][commitment];
         if (c.user != msg.sender) revert InvalidCommit();
         if (block.timestamp > uint256(c.timestamp) + MAX_COMMIT_AGE) revert CommitExpired();
+        if (block.timestamp < uint256(c.timestamp) + MIN_COMMIT_DELAY) revert CommitTooRecent();
 
         // Effects
         delete commits[msg.sender][commitment];
@@ -287,6 +292,7 @@ contract NexusMarket is
         Commit memory c = commits[msg.sender][commitment];
         if (c.user != msg.sender) revert InvalidCommit();
         if (block.timestamp > uint256(c.timestamp) + MAX_COMMIT_AGE) revert CommitExpired();
+        if (block.timestamp < uint256(c.timestamp) + MIN_COMMIT_DELAY) revert CommitTooRecent();
 
         delete commits[msg.sender][commitment];
         emit CommitConsumed(commitment, msg.sender);
