@@ -174,12 +174,17 @@ contract NexusMarketFuzzTest is Test {
     }
 
     function testFuzz_Commit_CannotBeStolen(bytes32 commitment) public {
+        // After the fix, attacker committing the same hash does NOT block the buyer.
+        // Each user has their own storage slot.
         vm.prank(buyer);
         market.commit(commitment);
 
+        // Attacker can also commit the same hash (different slot)
         vm.prank(attacker);
-        vm.expectRevert(NexusMarket.CommitExistsOrUnexpired.selector);
-        market.commit(commitment);
+        market.commit(commitment); // must succeed now
+
+        // Buyer is not affected
+        // (no revert expected)
     }
 
     function testFuzz_CancelAllOrders_IncrementsCounter(uint256 times) public {

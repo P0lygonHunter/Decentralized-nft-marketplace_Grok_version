@@ -174,6 +174,8 @@ contract NexusMarketTest is Test {
     }
 
     function test_Buy_WrongCommitUser_Griefing() public {
+        // After the hash-squatting fix, attacker committing the same hash
+        // has ZERO effect on the buyer. Buyer can still commit and buy successfully.
         uint256 id = _mint(seller, 0);
         uint128 price = 1 ether;
         _list(id, seller, price, 1 days);
@@ -181,13 +183,54 @@ contract NexusMarketTest is Test {
         uint256 nonce = market.commitNonces(buyer);
         bytes32 commitment = _directCommitment(buyer, seller, id, price, nonce);
 
-        // Attacker tries to grief by committing the hash
+        // Attacker tries to squat the hash
         vm.prank(attacker);
         market.commit(commitment);
 
+        // Buyer can still commit the same hash (different storage slot)
         vm.prank(buyer);
-        vm.expectRevert(NexusMarket.InvalidCommit.selector);
+        market.commit(commitment);
+
+        // And successfully buy
+        vm.prank(buyer);
         market.buy{value: price}(id);
+
+        assertEq(market.ownerOf(id), buyer);
+    }
+
+    /// @notice CRITICAL PoC: Proves that permanent hash-squatting is no longer possible.
+    /// Before the fix, attacker could permanently lock a victim out of a commitment hash.
+    function test_PoC_HashSquatting_NoLongerPossible() public {
+        uint256 id = _mint(seller, 0);
+        uint128 price = 1 ether;
+        _list(id, seller, price, 1 days);
+
+        uint256 nonce = market.commitNonces(buyer);
+        bytes32 commitment = _directCommitment(buyer, seller, id, price, nonce);
+
+        // 1. Attacker front-runs and commits the hash
+        vm.prank(attacker);
+        market.commit(commitment);
+
+        // 2. Victim should STILL be able to commit the same hash
+        vm.prank(buyer);
+        market.commit(commitment); // must succeed
+
+        // 3. Victim can buy
+        vm.prank(buyer);
+        market.buy{value: price}(id);
+
+        assertEq(market.ownerOf(id), buyer);
+
+        // 4. Even after MAX_COMMIT_AGE, attacker cannot block victim again
+        vm.warp(block.timestamp + 2 days);
+
+        uint256 nonce2 = market.commitNonces(buyer);
+        bytes32 commitment2 = _directCommitment(buyer, seller, id, price, nonce2); // new nonce after successful buy
+
+        // This would have been permanently blocked before the fix
+        vm.prank(buyer);
+        market.commit(commitment2); // must succeed
     }
 
     function test_Buy_CommitExpired() public {

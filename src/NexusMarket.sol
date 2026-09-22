@@ -94,7 +94,10 @@ contract NexusMarket is
     mapping(address => uint256) public counters;
 
     mapping(address => uint256) public commitNonces;
-    mapping(bytes32 => Commit)  public commits;
+
+    // FIXED: commits are now keyed by committer address to prevent hash-squatting / permanent griefing
+    // Old: mapping(bytes32 => Commit) public commits;  ← vulnerable
+    mapping(address => mapping(bytes32 => Commit)) public commits;
 
     // ============ EIP-712 ============
     bytes32 private constant ORDER_TYPEHASH =
@@ -156,18 +159,20 @@ contract NexusMarket is
         return id;
     }
 
-    // ============ Commit-Reveal ============
+    // ============ Commit-Reveal (Fixed against Hash-Squatting) ============
+    /// @notice Commit a hash. Now safely keyed by msg.sender so no one can squat another user's commitment.
     function commit(bytes32 commitment) external whenNotPaused {
-        Commit memory existing = commits[commitment];
+        Commit storage existing = commits[msg.sender][commitment];
 
+        // Allow overwrite only if never used by this user, or after expiry
         if (
-            existing.user != address(0) &&
-            !(existing.user == msg.sender && block.timestamp > uint256(existing.timestamp) + MAX_COMMIT_AGE)
+            existing.timestamp != 0 &&
+            block.timestamp <= uint256(existing.timestamp) + MAX_COMMIT_AGE
         ) {
             revert CommitExistsOrUnexpired();
         }
 
-        commits[commitment] = Commit({
+        commits[msg.sender][commitment] = Commit({
             user: msg.sender,
             timestamp: uint64(block.timestamp)
         });
@@ -219,12 +224,12 @@ contract NexusMarket is
             )
         );
 
-        Commit memory c = commits[commitment];
+        Commit memory c = commits[msg.sender][commitment];
         if (c.user != msg.sender) revert InvalidCommit();
         if (block.timestamp > uint256(c.timestamp) + MAX_COMMIT_AGE) revert CommitExpired();
 
         // Effects
-        delete commits[commitment];
+        delete commits[msg.sender][commitment];
         commitNonces[msg.sender]++;
         delete listings[tokenId];
         emit CommitConsumed(commitment, msg.sender);
@@ -279,11 +284,11 @@ contract NexusMarket is
 
         bytes32 commitment = keccak256(abi.encode(msg.sender, seller, structHash));
 
-        Commit memory c = commits[commitment];
+        Commit memory c = commits[msg.sender][commitment];
         if (c.user != msg.sender) revert InvalidCommit();
         if (block.timestamp > uint256(c.timestamp) + MAX_COMMIT_AGE) revert CommitExpired();
 
-        delete commits[commitment];
+        delete commits[msg.sender][commitment];
         emit CommitConsumed(commitment, msg.sender);
 
         if (ownerOf(tokenId) != seller) revert SellerNoLongerOwner();
